@@ -1,0 +1,161 @@
+---
+title: "Prediction of Movement Quality"
+author: "S.Wassenburg"
+date: "November 21, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Course Project Instruction - Practical Machine Learning 
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset).
+
+The data for this project can be found here: 
+Training data: <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+Test data: <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+The data for this project come from this source: <http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har> 
+
+## Getting Data
+
+Load data and packages:
+
+```{r loading, message=FALSE, warning=FALSE}
+TrainData <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+TestData <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+train <- read.csv(TrainData)
+test <- read.csv(TestData)
+library(dplyr)
+library(caret)
+```
+
+Because the goal is to predict the variable 'classe', we will first look at the number of cases per class in the training data. Every category has at least 3200 cases.
+
+```{r summary}
+summarize(group_by(train, classe), Training=n())
+```
+
+## Cross Validation
+
+For this report, we will use a simple type of cross validation technique, known as the Holdout Method. This means that the training will be subset into a training and test set. This way, we can train several machine learning models and try them on the test subset to see how they generalize to new data. Based on these tests, we can choose the best fitting model, which is not overfitted to the training data (evidenced by a good fit to the sub test data).
+
+We will now split the training dataset into a training subset (75%) and test subset (25%) so we can test multiple machine learning algorithms, before testing the best algorithm on the final test dataset.
+
+```{r subset}
+set.seed(101)
+inTrain <- createDataPartition(y=train$classe, p=0.75, list=FALSE)
+subtrain <- train[inTrain, ]; subtest <- train[-inTrain, ]
+dim(subtrain); dim(subtest)
+```
+
+## Preprocessing
+
+Data transformations will be performed based on the subtraining data and the exact same transformations will be performed on the sub test and final test data, without exploring these datasets.
+
+First, as many machine learning algorithms do not support missing values, we will check for columns with missing values in the subtraining dataset. 
+
+```{r missing values}
+na <-sapply(subtrain, function(y) sum(length(which(is.na(y)))))
+na <- data.frame(na)
+na <- tibble::rownames_to_column(na)
+blank <- sapply(subtrain, function(y) sum(length(which(y==""))))
+blank <- data.frame(blank)
+blank <- tibble::rownames_to_column(blank)
+na_blank <- full_join(na, blank, by=c("rowname","rowname"))
+na_blank <- mutate(na_blank, NaBlank=na+blank, NaBlankPerc=(na+blank)/nrow(subtrain)*100)
+filter(na_blank, NaBlank > 0)
+```
+
+There are 100 variables with more than 97% missing values. I will remove these variables from the dataset.
+
+```{r remove missing}
+notMissing <- filter(na_blank, NaBlank == 0)
+NewCol <- notMissing$rowname
+subtrain <- select(subtrain,one_of(NewCol))
+```
+
+Second, we will check for variables without variance, because these are not useful to use as a predictor in the model.
+
+```{r variance}
+NZV <- nearZeroVar(subtrain, saveMetrics=TRUE)
+```
+
+Only one variable has no variance: new_window. We remove the window and timestamp variables and the ID column from the subtrain dataset. 
+
+```{r remove}
+subtrain = subtrain[-c(1,2,3,4,5,6,7)]
+```
+
+The remaining columns will be used in the machine learning models. 
+
+```{r trainingdata}
+str(subtrain)
+```
+
+Before trying out machine learning algorithms, the exact same transformations have to be performed on the subtest and final test data. Also, we will remove the 'classe' column from the final test dataset, as we will predict this variable with our machine learning model.
+
+```{r transform testdata}
+transformsubtest <- colnames(subtrain)
+transformtest <- colnames(subtrain[, -53])
+subtest <- subtest[transformsubtest]
+test <- test[transformtest]
+```
+
+## Machine Learning Algorithms 
+
+Because we want to predict to which class an observation belongs, we will choose **classification algorithms**, such as Decision Trees and Random Forest. 
+- Naive Bayes is not suitable because it assumes independence between predictors.
+- Logistics regression is not suitable because it requires a dichotomous outcome.
+
+### Decision Tree
+
+We will start with a Decision (classification) Tree model using the rpart package and using all variables to predict 'classe'.
+
+```{r tree}
+set.seed(345)
+modTree <- train(classe~., data = subtrain, method="rpart")
+modTree
+```
+
+The accuracy of prediction is not very high (51%).
+We will test the model on the subtest data. The accuracy is only 49%.
+
+```{r testtree}
+predTree <- predict(modTree, subtest)
+table(predTree, subtest$classe)
+confusionMatrix(predTree, subtest$classe)
+```
+
+### Random Forest
+
+We will now try the Random Forest algorithm using all variables to predict 'classe' (note that this calculcation takes a while on a regular computer). 
+
+```{r forest}
+set.seed(456)
+modRF <- train(classe~., data = subtrain, method="rf")
+modR
+```
+
+The accuracy of this model is very high (99%). Let's see how well the model can predict 'classe' in our subtest data.
+
+```{r testforest}
+predRF <- predict(modRF, subtest)
+table(predRF, subtest$classe)
+confusionMatrix(predRF, subtest$classe)
+```
+
+The Random Forest model also works very well in predicting our subtest data (99%), with very low in-sample error. We will therefore use this model to predict the 20 cases in the final test dataset. 
+
+## Predictions
+
+We now use the Random forest to predict the final 20 test cases for the course quiz.
+
+```{r final test}
+predTEST <- predict(modRF, test)
+```
+
+
+Thanks for reading!
